@@ -1,0 +1,746 @@
+{
+  "name": "Enterprise Smart Lead Qualifier Bot",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "enterprise-lead-intake",
+        "responseMode": "responseNode",
+        "authentication": "headerAuth",
+        "options": {
+          "allowedOrigins": "https://yourdomain.com,https://app.yourdomain.com"
+        }
+      },
+      "id": "webhook_trigger",
+      "name": "Secure Lead Intake Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [200, 400],
+      "webhookId": "enterprise-lead-qualifier",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "webhook_auth",
+          "name": "Webhook API Key Authentication"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "{\n  \"status\": \"accepted\",\n  \"message\": \"Lead received and processing initiated\",\n  \"lead_id\": \"{{$json.lead_id || 'AUTO_GENERATED'}}\",\n  \"timestamp\": \"{{new Date().toISOString()}}\",\n  \"processing_queue\": \"enterprise-leads\"\n}"
+      },
+      "id": "webhook_response",
+      "name": "API Response Handler",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [440, 400]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Enterprise Lead Data Validation & Enrichment Engine\nconst leadData = $input.first().json;\nconst crypto = require('crypto');\n\n// Generate unique lead ID if not provided\nconst leadId = leadData.lead_id || crypto.randomUUID();\n\n// Advanced data validation with fallbacks\nconst validateEmail = (email) => {\n  const emailRegex = /^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/;\n  return emailRegex.test(email);\n};\n\nconst validatePhone = (phone) => {\n  const phoneRegex = /^[\\+]?[1-9][\\d\\s\\-\\(\\)]{7,15}$/;\n  return phoneRegex.test(phone?.replace(/\\s/g, ''));\n};\n\n// Extract and validate core fields\nconst name = (leadData.name || leadData.full_name || 'Unknown Contact').trim();\nconst email = (leadData.email || '').toLowerCase().trim();\nconst phone = (leadData.phone || leadData.telephone || '').trim();\nconst company = (leadData.company || leadData.organization || 'Individual').trim();\nconst jobTitle = (leadData.job_title || leadData.position || 'Not specified').trim();\nconst budget = parseFloat(leadData.budget || leadData.project_budget || 0);\nconst urgency = (leadData.urgency || leadData.priority || 'Low').toLowerCase();\nconst need = (leadData.need || leadData.requirements || leadData.project_description || 'Not specified').trim();\nconst leadSource = (leadData.source || leadData.lead_source || 'Direct').trim();\nconst industry = (leadData.industry || leadData.vertical || 'Unknown').trim();\nconst companySize = (leadData.company_size || leadData.employees || 'Unknown').trim();\nconst timeline = (leadData.timeline || leadData.project_timeline || 'Not specified').trim();\nconst previousClient = leadData.previous_client || false;\nconst referralSource = (leadData.referral_source || '').trim();\nconst geoLocation = {\n  country: leadData.country || 'Unknown',\n  state: leadData.state || 'Unknown',\n  city: leadData.city || 'Unknown',\n  timezone: leadData.timezone || 'UTC'\n};\n\n// Data quality score calculation\nlet qualityScore = 0;\nif (name !== 'Unknown Contact') qualityScore += 10;\nif (validateEmail(email)) qualityScore += 20;\nif (validatePhone(phone)) qualityScore += 15;\nif (company !== 'Individual') qualityScore += 10;\nif (jobTitle !== 'Not specified') qualityScore += 10;\nif (budget > 0) qualityScore += 15;\nif (need !== 'Not specified') qualityScore += 10;\nif (industry !== 'Unknown') qualityScore += 5;\nif (companySize !== 'Unknown') qualityScore += 5;\n\n// Advanced lead scoring algorithm\nlet leadScore = 0;\n\n// Budget scoring (0-40 points)\nif (budget >= 50000) leadScore += 40;\nelse if (budget >= 25000) leadScore += 35;\nelse if (budget >= 10000) leadScore += 30;\nelse if (budget >= 5000) leadScore += 25;\nelse if (budget >= 1000) leadScore += 20;\nelse if (budget >= 500) leadScore += 15;\nelse if (budget > 0) leadScore += 10;\n\n// Urgency scoring (0-25 points)\nswitch(urgency) {\n  case 'urgent':\n  case 'high':\n    leadScore += 25;\n    break;\n  case 'medium':\n    leadScore += 15;\n    break;\n  case 'low':\n    leadScore += 5;\n    break;\n}\n\n// Company size scoring (0-15 points)\nif (companySize.includes('1000+') || companySize.includes('enterprise')) leadScore += 15;\nelse if (companySize.includes('500-999') || companySize.includes('large')) leadScore += 12;\nelse if (companySize.includes('100-499') || companySize.includes('medium')) leadScore += 10;\nelse if (companySize.includes('50-99') || companySize.includes('small')) leadScore += 8;\nelse if (companySize.includes('10-49') || companySize.includes('startup')) leadScore += 5;\n\n// Industry scoring (0-10 points)\nconst highValueIndustries = ['technology', 'finance', 'healthcare', 'manufacturing', 'consulting'];\nif (highValueIndustries.some(ind => industry.toLowerCase().includes(ind))) leadScore += 10;\nelse if (industry !== 'Unknown') leadScore += 5;\n\n// Previous client bonus (0-10 points)\nif (previousClient) leadScore += 10;\n\n// Referral bonus (0-10 points)\nif (referralSource) leadScore += 10;\n\n// Data quality impact on score\nleadScore = Math.round(leadScore * (qualityScore / 100));\n\n// Determine lead tier and qualification status\nlet leadTier, qualificationStatus, priority;\nif (leadScore >= 80) {\n  leadTier = 'Platinum';\n  qualificationStatus = 'Hot Lead';\n  priority = 'Immediate';\n} else if (leadScore >= 60) {\n  leadTier = 'Gold';\n  qualificationStatus = 'Qualified';\n  priority = 'High';\n} else if (leadScore >= 40) {\n  leadTier = 'Silver';\n  qualificationStatus = 'Warm Lead';\n  priority = 'Medium';\n} else if (leadScore >= 20) {\n  leadTier = 'Bronze';\n  qualificationStatus = 'Cold Lead';\n  priority = 'Low';\n} else {\n  leadTier = 'Unqualified';\n  qualificationStatus = 'Disqualified';\n  priority = 'None';\n}\n\n// Determine if lead meets qualification criteria\nconst isQualified = leadScore >= 40 && qualityScore >= 60;\nconst requiresImmediateAction = leadScore >= 80 || (budget >= 25000 && urgency === 'urgent');\n\n// Generate timestamp and processing metadata\nconst timestamp = new Date().toISOString();\nconst processingId = crypto.randomUUID();\n\n// Return enriched lead data\nreturn {\n  // Core lead information\n  lead_id: leadId,\n  processing_id: processingId,\n  name,\n  email,\n  phone,\n  company,\n  job_title: jobTitle,\n  \n  // Project details\n  budget,\n  urgency,\n  need,\n  timeline,\n  \n  // Company information\n  industry,\n  company_size: companySize,\n  \n  // Source tracking\n  lead_source: leadSource,\n  referral_source: referralSource,\n  previous_client: previousClient,\n  \n  // Geographic data\n  geo_location: geoLocation,\n  \n  // Processing metadata\n  timestamp,\n  processed_at: timestamp,\n  \n  // Scoring and qualification\n  lead_score: leadScore,\n  quality_score: qualityScore,\n  lead_tier: leadTier,\n  qualification_status: qualificationStatus,\n  priority,\n  is_qualified: isQualified,\n  requires_immediate_action: requiresImmediateAction,\n  \n  // Validation flags\n  email_valid: validateEmail(email),\n  phone_valid: validatePhone(phone),\n  \n  // Additional metadata\n  qualification_reason: isQualified ? \n    `High-value lead: Score ${leadScore}, ${leadTier} tier, ${qualificationStatus}` : \n    `Low-value lead: Score ${leadScore}, Quality ${qualityScore}%`,\n  \n  next_action: requiresImmediateAction ? \n    'Immediate sales outreach required' : \n    isQualified ? 'Add to nurture sequence' : 'Archive in database'\n};"
+      },
+      "id": "lead_processing_engine",
+      "name": "Lead Processing & Scoring Engine",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [680, 400]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{$json.is_qualified}}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "id": "qualification_router",
+      "name": "Lead Qualification Router",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [920, 400]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{$json.requires_immediate_action}}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "id": "priority_router",
+      "name": "Priority Lead Router",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [1160, 280]
+    },
+    {
+      "parameters": {
+        "channel": "#hot-leads-alert",
+        "text": "🚨 **URGENT: Hot Lead Alert!** 🚨\n\n🎯 **Lead ID:** {{$json.lead_id}}\n👤 **Contact:** {{$json.name}} ({{$json.job_title}})\n🏢 **Company:** {{$json.company}} ({{$json.industry}})\n📧 **Email:** {{$json.email}}\n📞 **Phone:** {{$json.phone}}\n💰 **Budget:** ${{$json.budget.toLocaleString()}}\n🔥 **Urgency:** {{$json.urgency}}\n📈 **Lead Score:** {{$json.lead_score}}/100 ({{$json.lead_tier}})\n🎯 **Status:** {{$json.qualification_status}}\n📝 **Requirements:** {{$json.need}}\n⏰ **Timeline:** {{$json.timeline}}\n🌍 **Location:** {{$json.geo_location.city}}, {{$json.geo_location.country}}\n📊 **Source:** {{$json.lead_source}}\n\n**⚡ IMMEDIATE ACTION REQUIRED ⚡**\n*This lead requires immediate sales outreach within 15 minutes*\n\n@channel @sales-team",
+        "attachments": [
+          {
+            "color": "#ff0000",
+            "title": "Lead Details",
+            "fields": [
+              {
+                "title": "Processing ID",
+                "value": "{{$json.processing_id}}",
+                "short": true
+              },
+              {
+                "title": "Data Quality",
+                "value": "{{$json.quality_score}}%",
+                "short": true
+              }
+            ]
+          }
+        ]
+      },
+      "id": "urgent_slack_alert",
+      "name": "Urgent Slack Alert",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 1,
+      "position": [1400, 180],
+      "credentials": {
+        "slackApi": {
+          "id": "slack_credentials",
+          "name": "Slack API Credentials"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "channel": "#qualified-leads",
+        "text": "✅ **New Qualified Lead**\n\n🎯 **Lead ID:** {{$json.lead_id}}\n👤 **Contact:** {{$json.name}} ({{$json.job_title}})\n🏢 **Company:** {{$json.company}}\n📧 **Email:** {{$json.email}}\n💰 **Budget:** ${{$json.budget.toLocaleString()}}\n🔥 **Urgency:** {{$json.urgency}}\n📈 **Lead Score:** {{$json.lead_score}}/100 ({{$json.lead_tier}})\n🎯 **Status:** {{$json.qualification_status}}\n📝 **Requirements:** {{$json.need}}\n🌍 **Location:** {{$json.geo_location.city}}, {{$json.geo_location.country}}\n📊 **Source:** {{$json.lead_source}}\n\n*Follow up within 24 hours*",
+        "attachments": [
+          {
+            "color": "#36a64f",
+            "title": "Lead Metrics",
+            "fields": [
+              {
+                "title": "Lead Score",
+                "value": "{{$json.lead_score}}/100",
+                "short": true
+              },
+              {
+                "title": "Tier",
+                "value": "{{$json.lead_tier}}",
+                "short": true
+              }
+            ]
+          }
+        ]
+      },
+      "id": "qualified_slack_notification",
+      "name": "Qualified Lead Slack Notification",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 1,
+      "position": [1400, 360]
+    },
+    {
+      "parameters": {
+        "fromEmail": "leads@yourcompany.com",
+        "toEmail": "sales-director@yourcompany.com,sales-manager@yourcompany.com",
+        "subject": "🚨 URGENT: Hot Lead Alert - {{$json.name}} ({{$json.company}}) - ${{$json.budget.toLocaleString()}}",
+        "emailFormat": "html",
+        "html": "<!DOCTYPE html>\n<html>\n<head>\n    <style>\n        body { font-family: Arial, sans-serif; margin: 0; padding: 20px; background-color: #f4f4f4; }\n        .container { max-width: 600px; margin: 0 auto; background-color: white; border-radius: 10px; overflow: hidden; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }\n        .header { background: linear-gradient(135deg, #ff4444, #cc0000); color: white; padding: 20px; text-align: center; }\n        .content { padding: 30px; }\n        .urgent-banner { background-color: #ff0000; color: white; padding: 15px; text-align: center; font-weight: bold; margin: -30px -30px 30px -30px; }\n        .lead-details { background-color: #f8f9fa; padding: 20px; border-radius: 8px; margin: 20px 0; }\n        .detail-row { display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid #eee; }\n        .detail-label { font-weight: bold; color: #333; }\n        .detail-value { color: #666; }\n        .score-badge { display: inline-block; background: linear-gradient(135deg, #4CAF50, #45a049); color: white; padding: 8px 16px; border-radius: 20px; font-weight: bold; margin: 10px 0; }\n        .action-button { background: linear-gradient(135deg, #ff6b6b, #ff5252); color: white; padding: 15px 30px; border: none; border-radius: 5px; font-size: 16px; font-weight: bold; cursor: pointer; text-decoration: none; display: inline-block; margin: 20px 0; }\n        .footer { background-color: #f8f9fa; padding: 20px; text-align: center; color: #666; }\n    </style>\n</head>\n<body>\n    <div class=\"container\">\n        <div class=\"header\">\n            <h1>🚨 URGENT HOT LEAD ALERT 🚨</h1>\n            <p>Immediate Action Required Within 15 Minutes</p>\n        </div>\n        \n        <div class=\"content\">\n            <div class=\"urgent-banner\">\n                ⚡ HIGH-VALUE LEAD REQUIRES IMMEDIATE ATTENTION ⚡\n            </div>\n            \n            <div class=\"lead-details\">\n                <h2>Lead Information</h2>\n                <div class=\"detail-row\">\n                    <span class=\"detail-label\">Lead ID:</span>\n                    <span class=\"detail-value\">{{$json.lead_id}}</span>\n                </div>\n                <div class=\"detail-row\">\n                    <span class=\"detail-label\">Contact Name:</span>\n                    <span class=\"detail-value\">{{$json.name}}</span>\n                </div>\n                <div class=\"detail-row\">\n                    <span class=\"detail-label\">Job Title:</span>\n                    <span class=\"detail-value\">{{$json.job_title}}</span>\n                </div>\n                <div class=\"detail-row\">\n                    <span class=\"detail-label\">Company:</span>\n                    <span class=\"detail-value\">{{$json.company}}</span>\n                </div>\n                <div class=\"detail-row\">\n                    <span class=\"detail-label\">Industry:</span>\n                    <span class=\"detail-value\">{{$json.industry}}</span>\n                </div>\n                <div class=\"detail-row\">\n                    <span class=\"detail-label\">Email:</span>\n                    <span class=\"detail-value\">{{$json.email}}</span>\n                </div>\n                <div class=\"detail-row\">\n                    <span class=\"detail-label\">Phone:</span>\n                    <span class=\"detail-value\">{{$json.phone}}</span>\n                </div>\n                <div class=\"detail-row\">\n                    <span class=\"detail-label\">Budget:</span>\n                    <span class=\"detail-value\" style=\"color: #4CAF50; font-weight: bold;\">${{$json.budget.toLocaleString()}}</span>\n                </div>\n                <div class=\"detail-row\">\n                    <span class=\"detail-label\">Urgency:</span>\n                    <span class=\"detail-value\" style=\"color: #ff0000; font-weight: bold;\">{{$json.urgency}}</span>\n                </div>\n                <div class=\"detail-row\">\n                    <span class=\"detail-label\">Timeline:</span>\n                    <span class=\"detail-value\">{{$json.timeline}}</span>\n                </div>\n                <div class=\"detail-row\">\n                    <span class=\"detail-label\">Location:</span>\n                    <span class=\"detail-value\">{{$json.geo_location.city}}, {{$json.geo_location.country}}</span>\n                </div>\n                <div class=\"detail-row\">\n                    <span class=\"detail-label\">Source:</span>\n                    <span class=\"detail-value\">{{$json.lead_source}}</span>\n                </div>\n            </div>\n            \n            <div class=\"score-badge\">\n                Lead Score: {{$json.lead_score}}/100 ({{$json.lead_tier}} Tier)\n            </div>\n            \n            <div style=\"margin: 20px 0;\">\n                <h3>Project Requirements:</h3>\n                <p style=\"background-color: #f0f0f0; padding: 15px; border-radius: 5px;\">{{$json.need}}</p>\n            </div>\n            \n            <div style=\"text-align: center; margin: 30px 0;\">\n                <a href=\"mailto:{{$json.email}}?subject=Re: Your inquiry\" class=\"action-button\">\n                    📧 Contact Lead Immediately\n                </a>\n            </div>\n        </div>\n        \n        <div class=\"footer\">\n            <p>Lead processed at {{$json.timestamp}}</p>\n            <p>Processing ID: {{$json.processing_id}}</p>\n        </div>\n    </div>\n</body>\n</html>",
+        "options": {
+          "priority": "high"
+        }
+      },
+      "id": "urgent_email_alert",
+      "name": "Urgent Email Alert",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2,
+      "position": [1400, 80],
+      "credentials": {
+        "smtp": {
+          "id": "smtp_credentials",
+          "name": "SMTP Email Credentials"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "fromEmail": "leads@yourcompany.com",
+        "toEmail": "sales-team@yourcompany.com",
+        "subject": "New Qualified Lead - {{$json.name}} ({{$json.company}}) - {{$json.lead_tier}} Tier",
+        "emailFormat": "html",
+        "html": "<!DOCTYPE html>\n<html>\n<head>\n    <style>\n        body { font-family: Arial, sans-serif; margin: 0; padding: 20px; background-color: #f4f4f4; }\n        .container { max-width: 600px; margin: 0 auto; background-color: white; border-radius: 10px; overflow: hidden; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }\n        .header { background: linear-gradient(135deg, #4CAF50, #45a049); color: white; padding: 20px; text-align: center; }\n        .content { padding: 30px; }\n        .lead-details { background-color: #f8f9fa; padding: 20px; border-radius: 8px; margin: 20px 0; }\n        .detail-row { display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid #eee; }\n        .detail-label { font-weight: bold; color: #333; }\n        .detail-value { color: #666; }\n        .score-badge { display: inline-block; background: linear-gradient(135deg, #4CAF50, #45a049); color: white; padding: 8px 16px; border-radius: 20px; font-weight: bold; margin: 10px 0; }\n        .action-button { background: linear-gradient(135deg, #2196F3, #0b7dda); color: white; padding: 15px 30px; border: none; border-radius: 5px; font-size: 16px; font-weight: bold; cursor: pointer; text-decoration: none; display: inline-block; margin: 20px 0; }\n        .footer { background-color: #f8f9fa; padding: 20px; text-align: center; color: #666; }\n    </style>\n</head>\n<body>\n    <div class=\"container\">\n        <div class=\"header\">\n            <h1>✅ New Qualified Lead</h1>\n            <p>Follow up within 24 hours</p>\n        </div>\n        \n        <div class=\"content\">\n            <div class=\"lead-details\">\n                <h2>Lead Information</h2>\n                <div class=\"detail-row\">\n                    <span class=\"detail-label\">Lead ID:</span>\n                    <span class=\"detail-value\">{{$json.lead_id}}</span>\n                </div>\n                <div class=\"detail-row\">\n                    <span class=\"detail-label\">Contact Name:</span>\n                    <span class=\"detail-value\">{{$json.name}}</span>\n                </div>\n                <div class=\"detail-row\">\n                    <span class=\"detail-label\">Job Title:</span>\n                    <span class=\"detail-value\">{{$json.job_title}}</span>\n                </div>\n                <div class=\"detail-row\">\n                    <span class=\"detail-label\">Company:</span>\n                    <span class=\"detail-value\">{{$json.company}}</span>\n                </div>\n                <div class=\"detail-row\">\n                    <span class=\"detail-label\">Email:</span>\n                    <span class=\"detail-value\">{{$json.email}}</span>\n                </div>\n                <div class=\"detail-row\">\n                    <span class=\"detail-label\">Phone:</span>\n                    <span class=\"detail-value\">{{$json.phone}}</span>\n                </div>\n                <div class=\"detail-row\">\n                    <span class=\"detail-label\">Budget:</span>\n                    <span class=\"detail-value\" style=\"color: #4CAF50; font-weight: bold;\">${{$json.budget.toLocaleString()}}</span>\n                </div>\n                <div class=\"detail-row\">\n                    <span class=\"detail-label\">Urgency:</span>\n                    <span class=\"detail-value\">{{$json.urgency}}</span>\n                </div>\n                <div class=\"detail-row\">\n                    <span class=\"detail-label\">Source:</span>\n                    <span class=\"detail-value\">{{$json.lead_source}}</span>\n                </div>\n            </div>\n            \n            <div class=\"score-badge\">\n                Lead Score: {{$json.lead_score}}/100 ({{$json.lead_tier}} Tier)\n            </div>\n            \n            <div style=\"margin: 20px 0;\">\n                <h3>Project Requirements:</h3>\n                <p style=\"background-color: #f0f0f0; padding: 15px; border-radius: 5px;\">{{$json.need}}</p>\n            </div>\n            \n            <div style=\"text-align: center; margin: 30px 0;\">\n                <a href=\"mailto:{{$json.email}}?subject=Re: Your inquiry\" class=\"action-button\">\n                    📧 Contact Lead\n                </a>\n            </div>\n        </div>\n        \n        <div class=\"footer\">\n            <p>Lead processed at {{$json.timestamp}}</p>\n            <p>Processing ID: {{$json.processing_id}}</p>\n        </div>\n    </div>\n</body>\n</html>",
+        "options": {}
+      },
+      "id": "qualified_email_notification",
+      "name": "Qualified Lead Email Notification",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2,
+      "position": [1400, 460]
+    },
+    {
+      "parameters": {
+        "documentId": "YOUR_GOOGLE_SHEET_ID",
+        "sheetName": "Hot Leads",
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Lead_ID": "={{$json.lead_id}}",
+            "Processing_ID": "={{$json.processing_id}}",
+            "Name": "={{$json.name}}",
+            "Job_Title": "={{$json.job_title}}",
+            "Company": "={{$json.company}}",
+            "Industry": "={{$json.industry}}",
+            "Email": "={{$json.email}}",
+            "Phone": "={{$json.phone}}",
+            "Budget": "={{$json.budget}}",
+            "Urgency": "={{$json.urgency}}",
+            "Timeline": "={{$json.timeline}}",
+            "Requirements": "={{$json.need}}",
+            "Lead_Source": "={{$json.lead_source}}",
+            "Referral_Source": "={{$json.referral_source}}",
+            "Country": "={{$json.geo_location.country}}",
+            "State": "={{$json.geo_location.state}}",
+            "City": "={{$json.geo_location.city}}",
+            "Lead_Score": "={{$json.lead_score}}",
+            "Quality_Score": "={{$json.quality_score}}",
+            "Lead_Tier": "={{$json.lead_tier}}",
+            "Qualification_Status": "={{$json.qualification_status}}",
+            "Priority": "={{$json.priority}}",
+            "Email_Valid": "={{$json.email_valid}}",
+            "Phone_Valid": "={{$json.phone_valid}}",
+            "Previous_Client": "={{$json.previous_client}}",
+            "Next_Action": "={{$json.next_action}}",
+            "Timestamp": "={{$json.timestamp}}",
+            "Status": "Urgent - Immediate Action Required",
+            "Assigned_To": "",
+            "Notes": "Hot lead requires immediate sales outreach"
+          }
+        },
+        "options": {
+          "continue": true,
+          "useAppend": true
+        }
+      },
+      "id": "add_to_hot_leads_sheet",
+      "name": "Add to Hot Leads Sheet",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [1640, 180],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "google_sheets_credentials",
+          "name": "Google Sheets OAuth2 API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "documentId": "YOUR_GOOGLE_SHEET_ID",
+        "sheetName": "Qualified Leads",
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Lead_ID": "={{$json.lead_id}}",
+            "Processing_ID": "={{$json.processing_id}}",
+            "Name": "={{$json.name}}",
+            "Job_Title": "={{$json.job_title}}",
+            "Company": "={{$json.company}}",
+            "Industry": "={{$json.industry}}",
+            "Company_Size": "={{$json.company_size}}",
+            "Email": "={{$json.email}}",
+            "Phone": "={{$json.phone}}",
+            "Budget": "={{$json.budget}}",
+            "Urgency": "={{$json.urgency}}",
+            "Timeline": "={{$json.timeline}}",
+            "Requirements": "={{$json.need}}",
+            "Lead_Source": "={{$json.lead_source}}",
+            "Referral_Source": "={{$json.referral_source}}",
+            "Country": "={{$json.geo_location.country}}",
+            "State": "={{$json.geo_location.state}}",
+            "City": "={{$json.geo_location.city}}",
+            "Timezone": "={{$json.geo_location.timezone}}",
+            "Lead_Score": "={{$json.lead_score}}",
+            "Quality_Score": "={{$json.quality_score}}",
+            "Lead_Tier": "={{$json.lead_tier}}",
+            "Qualification_Status": "={{$json.qualification_status}}",
+            "Priority": "={{$json.priority}}",
+            "Email_Valid": "={{$json.email_valid}}",
+            "Phone_Valid": "={{$json.phone_valid}}",
+            "Previous_Client": "={{$json.previous_client}}",
+            "Next_Action": "={{$json.next_action}}",
+            "Qualification_Reason": "={{$json.qualification_reason}}",
+            "Timestamp": "={{$json.timestamp}}",
+            "Status": "Qualified - Follow Up Required",
+            "Assigned_To": "",
+            "Follow_Up_Date": "",
+            "Notes": ""
+          }
+        },
+        "options": {
+          "continue": true,
+          "useAppend": true
+        }
+      },
+      "id": "add_to_qualified_leads_sheet",
+      "name": "Add to Qualified Leads Sheet",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [1640, 360],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "google_sheets_credentials",
+          "name": "Google Sheets OAuth2 API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "documentId": "YOUR_GOOGLE_SHEET_ID",
+        "sheetName": "Unqualified Leads",
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Lead_ID": "={{$json.lead_id}}",
+            "Processing_ID": "={{$json.processing_id}}",
+            "Name": "={{$json.name}}",
+            "Job_Title": "={{$json.job_title}}",
+            "Company": "={{$json.company}}",
+            "Industry": "={{$json.industry}}",
+            "Company_Size": "={{$json.company_size}}",
+            "Email": "={{$json.email}}",
+            "Phone": "={{$json.phone}}",
+            "Budget": "={{$json.budget}}",
+            "Urgency": "={{$json.urgency}}",
+            "Timeline": "={{$json.timeline}}",
+            "Requirements": "={{$json.need}}",
+            "Lead_Source": "={{$json.lead_source}}",
+            "Referral_Source": "={{$json.referral_source}}",
+            "Country": "={{$json.geo_location.country}}",
+            "State": "={{$json.geo_location.state}}",
+            "City": "={{$json.geo_location.city}}",
+            "Lead_Score": "={{$json.lead_score}}",
+            "Quality_Score": "={{$json.quality_score}}",
+            "Lead_Tier": "={{$json.lead_tier}}",
+            "Qualification_Status": "={{$json.qualification_status}}",
+            "Priority": "={{$json.priority}}",
+            "Email_Valid": "={{$json.email_valid}}",
+            "Phone_Valid": "={{$json.phone_valid}}",
+            "Previous_Client": "={{$json.previous_client}}",
+            "Disqualification_Reason": "={{$json.qualification_reason}}",
+            "Next_Action": "={{$json.next_action}}",
+            "Timestamp": "={{$json.timestamp}}",
+            "Status": "Unqualified",
+            "Nurture_Campaign": "Low Priority Sequence",
+            "Notes": "Lead did not meet qualification criteria"
+          }
+        },
+        "options": {
+          "continue": true,
+          "useAppend": true
+        }
+      },
+      "id": "add_to_unqualified_leads_sheet",
+      "name": "Add to Unqualified Leads Sheet",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [1160, 580],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "google_sheets_credentials",
+          "name": "Google Sheets OAuth2 API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "url": "https://api.hubspot.com/crm/v3/objects/contacts",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "hubspotApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "properties",
+              "value": "={\n  \"email\": \"{{$json.email}}\",\n  \"firstname\": \"{{$json.name.split(' ')[0]}}\",\n  \"lastname\": \"{{$json.name.split(' ').slice(1).join(' ')}}\",\n  \"company\": \"{{$json.company}}\",\n  \"jobtitle\": \"{{$json.job_title}}\",\n  \"phone\": \"{{$json.phone}}\",\n  \"industry\": \"{{$json.industry}}\",\n  \"lead_score\": \"{{$json.lead_score}}\",\n  \"lead_tier\": \"{{$json.lead_tier}}\",\n  \"qualification_status\": \"{{$json.qualification_status}}\",\n  \"lead_source\": \"{{$json.lead_source}}\",\n  \"budget\": \"{{$json.budget}}\",\n  \"urgency\": \"{{$json.urgency}}\",\n  \"requirements\": \"{{$json.need}}\",\n  \"processing_id\": \"{{$json.processing_id}}\",\n  \"country\": \"{{$json.geo_location.country}}\",\n  \"state\": \"{{$json.geo_location.state}}\",\n  \"city\": \"{{$json.geo_location.city}}\"\n}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "sync_to_hubspot",
+      "name": "Sync to HubSpot CRM",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [1880, 280],
+      "credentials": {
+        "hubspotApi": {
+          "id": "hubspot_credentials",
+          "name": "HubSpot API Credentials"
+        }
+      },
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "url": "https://hooks.zapier.com/hooks/catch/YOUR_ZAPIER_WEBHOOK_ID/",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "X-API-Key",
+              "value": "={{$credentials.zapier_webhook.api_key}}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "event_type",
+              "value": "qualified_lead"
+            },
+            {
+              "name": "lead_data",
+              "value": "={{JSON.stringify($json)}}"
+            },
+            {
+              "name": "timestamp",
+              "value": "={{$json.timestamp}}"
+            },
+            {
+              "name": "priority",
+              "value": "={{$json.priority}}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "zapier_integration",
+      "name": "Zapier Integration Webhook",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [1880, 380],
+      "credentials": {
+        "zapier_webhook": {
+          "id": "zapier_credentials",
+          "name": "Zapier Webhook Credentials"
+        }
+      },
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "jsCode": "// Advanced Lead Analytics & Reporting Engine\nconst leadData = $input.first().json;\nconst timestamp = new Date();\n\n// Calculate processing time\nconst processingStartTime = new Date(leadData.timestamp);\nconst processingTime = timestamp - processingStartTime;\n\n// Generate comprehensive analytics\nconst analytics = {\n  lead_id: leadData.lead_id,\n  processing_id: leadData.processing_id,\n  processing_time_ms: processingTime,\n  processing_date: timestamp.toISOString(),\n  \n  // Lead metrics\n  lead_score: leadData.lead_score,\n  quality_score: leadData.quality_score,\n  lead_tier: leadData.lead_tier,\n  qualification_status: leadData.qualification_status,\n  is_qualified: leadData.is_qualified,\n  requires_immediate_action: leadData.requires_immediate_action,\n  \n  // Source analysis\n  lead_source: leadData.lead_source,\n  referral_source: leadData.referral_source,\n  previous_client: leadData.previous_client,\n  \n  // Geographic data\n  country: leadData.geo_location.country,\n  state: leadData.geo_location.state,\n  city: leadData.geo_location.city,\n  timezone: leadData.geo_location.timezone,\n  \n  // Business metrics\n  budget: leadData.budget,\n  urgency: leadData.urgency,\n  industry: leadData.industry,\n  company_size: leadData.company_size,\n  \n  // Data validation results\n  email_valid: leadData.email_valid,\n  phone_valid: leadData.phone_valid,\n  \n  // Processing results\n  notifications_sent: leadData.is_qualified ? \n    (leadData.requires_immediate_action ? 'urgent_alerts' : 'standard_qualified') : 'none',\n  \n  sheet_destination: leadData.requires_immediate_action ? 'hot_leads' : \n    (leadData.is_qualified ? 'qualified_leads' : 'unqualified_leads'),\n  \n  crm_synced: true,\n  webhook_triggered: true,\n  \n  // System metadata\n  workflow_version: '2.0',\n  processing_node: 'enterprise-lead-qualifier',\n  \n  // Next actions\n  next_action: leadData.next_action,\n  follow_up_priority: leadData.priority,\n  \n  // Success metrics\n  processing_successful: true,\n  error_count: 0,\n  \n  // Performance metrics\n  performance_rating: processingTime < 5000 ? 'excellent' : \n    processingTime < 10000 ? 'good' : 'needs_optimization'\n};\n\n// Log comprehensive analytics\nconsole.log('=== LEAD PROCESSING COMPLETE ===');\nconsole.log('Lead ID:', leadData.lead_id);\nconsole.log('Processing ID:', leadData.processing_id);\nconsole.log('Lead Score:', leadData.lead_score + '/100');\nconsole.log('Qualification Status:', leadData.qualification_status);\nconsole.log('Tier:', leadData.lead_tier);\nconsole.log('Budget:', ' + leadData.budget.toLocaleString());\nconsole.log('Urgency:', leadData.urgency);\nconsole.log('Company:', leadData.company);\nconsole.log('Industry:', leadData.industry);\nconsole.log('Source:', leadData.lead_source);\nconsole.log('Location:', leadData.geo_location.city + ', ' + leadData.geo_location.country);\nconsole.log('Email Valid:', leadData.email_valid);\nconsole.log('Phone Valid:', leadData.phone_valid);\nconsole.log('Processing Time:', processingTime + 'ms');\nconsole.log('Next Action:', leadData.next_action);\nconsole.log('Notifications Sent:', analytics.notifications_sent);\nconsole.log('Sheet Destination:', analytics.sheet_destination);\nconsole.log('=== END PROCESSING LOG ===');\n\n// Return both original lead data and analytics\nreturn {\n  ...leadData,\n  analytics: analytics,\n  processing_summary: {\n    status: 'completed',\n    message: 'Lead successfully processed and routed',\n    processing_time: processingTime,\n    final_destination: analytics.sheet_destination,\n    notifications_sent: analytics.notifications_sent,\n    performance_rating: analytics.performance_rating\n  }\n};"
+      },
+      "id": "analytics_engine",
+      "name": "Analytics & Reporting Engine",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2120, 400]
+    },
+    {
+      "parameters": {
+        "documentId": "YOUR_ANALYTICS_SHEET_ID",
+        "sheetName": "Lead Analytics",
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Lead_ID": "={{$json.lead_id}}",
+            "Processing_ID": "={{$json.processing_id}}",
+            "Processing_Date": "={{$json.analytics.processing_date}}",
+            "Processing_Time_MS": "={{$json.analytics.processing_time_ms}}",
+            "Lead_Score": "={{$json.analytics.lead_score}}",
+            "Quality_Score": "={{$json.analytics.quality_score}}",
+            "Lead_Tier": "={{$json.analytics.lead_tier}}",
+            "Qualification_Status": "={{$json.analytics.qualification_status}}",
+            "Is_Qualified": "={{$json.analytics.is_qualified}}",
+            "Requires_Immediate_Action": "={{$json.analytics.requires_immediate_action}}",
+            "Lead_Source": "={{$json.analytics.lead_source}}",
+            "Referral_Source": "={{$json.analytics.referral_source}}",
+            "Previous_Client": "={{$json.analytics.previous_client}}",
+            "Country": "={{$json.analytics.country}}",
+            "State": "={{$json.analytics.state}}",
+            "City": "={{$json.analytics.city}}",
+            "Timezone": "={{$json.analytics.timezone}}",
+            "Budget": "={{$json.analytics.budget}}",
+            "Urgency": "={{$json.analytics.urgency}}",
+            "Industry": "={{$json.analytics.industry}}",
+            "Company_Size": "={{$json.analytics.company_size}}",
+            "Email_Valid": "={{$json.analytics.email_valid}}",
+            "Phone_Valid": "={{$json.analytics.phone_valid}}",
+            "Notifications_Sent": "={{$json.analytics.notifications_sent}}",
+            "Sheet_Destination": "={{$json.analytics.sheet_destination}}",
+            "CRM_Synced": "={{$json.analytics.crm_synced}}",
+            "Webhook_Triggered": "={{$json.analytics.webhook_triggered}}",
+            "Workflow_Version": "={{$json.analytics.workflow_version}}",
+            "Processing_Node": "={{$json.analytics.processing_node}}",
+            "Next_Action": "={{$json.analytics.next_action}}",
+            "Follow_Up_Priority": "={{$json.analytics.follow_up_priority}}",
+            "Processing_Successful": "={{$json.analytics.processing_successful}}",
+            "Error_Count": "={{$json.analytics.error_count}}",
+            "Performance_Rating": "={{$json.analytics.performance_rating}}"
+          }
+        },
+        "options": {
+          "continue": true,
+          "useAppend": true
+        }
+      },
+      "id": "log_to_analytics_sheet",
+      "name": "Log to Analytics Sheet",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [2360, 400],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "google_sheets_credentials",
+          "name": "Google Sheets OAuth2 API"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Secure Lead Intake Webhook": {
+      "main": [
+        [
+          {
+            "node": "API Response Handler",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "API Response Handler": {
+      "main": [
+        [
+          {
+            "node": "Lead Processing & Scoring Engine",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Lead Processing & Scoring Engine": {
+      "main": [
+        [
+          {
+            "node": "Lead Qualification Router",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Lead Qualification Router": {
+      "main": [
+        [
+          {
+            "node": "Priority Lead Router",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Add to Unqualified Leads Sheet",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Priority Lead Router": {
+      "main": [
+        [
+          {
+            "node": "Urgent Email Alert",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Urgent Slack Alert",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Qualified Lead Slack Notification",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Qualified Lead Email Notification",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Urgent Slack Alert": {
+      "main": [
+        [
+          {
+            "node": "Add to Hot Leads Sheet",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Urgent Email Alert": {
+      "main": [
+        [
+          {
+            "node": "Add to Hot Leads Sheet",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Qualified Lead Slack Notification": {
+      "main": [
+        [
+          {
+            "node": "Add to Qualified Leads Sheet",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Qualified Lead Email Notification": {
+      "main": [
+        [
+          {
+            "node": "Add to Qualified Leads Sheet",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Add to Hot Leads Sheet": {
+      "main": [
+        [
+          {
+            "node": "Sync to HubSpot CRM",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Add to Qualified Leads Sheet": {
+      "main": [
+        [
+          {
+            "node": "Sync to HubSpot CRM",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Add to Unqualified Leads Sheet": {
+      "main": [
+        [
+          {
+            "node": "Analytics & Reporting Engine",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sync to HubSpot CRM": {
+      "main": [
+        [
+          {
+            "node": "Zapier Integration Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Zapier Integration Webhook": {
+      "main": [
+        [
+          {
+            "node": "Analytics & Reporting Engine",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Analytics & Reporting Engine": {
+      "main": [
+        [
+          {
+            "node": "Log to Analytics Sheet",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "timezone": "UTC",
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner",
+    "errorWorkflow": "error-handler-workflow-id"
+  },
+  "staticData": {},
+  "pinData": {},
+  "versionId": "2.0",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "enterprise-lead-qualifier-bot-v2"
+  },
+  "id": "enterprise-lead-qualifier-bot",
+  "tags": [
+    {
+      "createdAt": "2025-01-01T00:00:00.000Z",
+      "updatedAt": "2025-01-01T00:00:00.000Z",
+      "id": "enterprise-lead-management",
+      "name": "Enterprise Lead Management"
+    },
+    {
+      "createdAt": "2025-01-01T00:00:00.000Z",
+      "updatedAt": "2025-01-01T00:00:00.000Z",
+      "id": "advanced-automation",
+      "name": "Advanced Automation"
+    },
+    {
+      "createdAt": "2025-01-01T00:00:00.000Z",
+      "updatedAt": "2025-01-01T00:00:00.000Z",
+      "id": "crm-integration",
+      "name": "CRM Integration"
+    }
+  ]
+}
